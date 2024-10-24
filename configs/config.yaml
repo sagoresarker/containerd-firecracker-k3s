@@ -1,0 +1,18 @@
+vm:
+  id: "microvm-01"
+  image: "docker.io/library/ubuntu:20.04"
+  kernel: "/var/lib/firecracker-containerd/kernel/vmlinux"
+  cpus: 2
+  memory_mb: 2048
+  ip: "172.20.0.2"
+  gateway: "172.20.0.1"
+  netmask: "255.255.255.0"
+  mac_address: "AA:FC:00:00:00:01"
+  nameservers:
+    - "8.8.8.8"
+    - "8.8.4.4"
+
+ssh:
+  user: "ubuntu"
+  key_path: "/path/to/your/ssh/key"
+  port: 22
