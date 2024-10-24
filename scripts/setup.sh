@@ -8,6 +8,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Install dependencies
+echo "Installing dependencies..."
 apt-get update
 apt-get install -y \
     containerd \
@@ -15,76 +16,153 @@ apt-get install -y \
     ca-certificates \
     curl \
     gnupg \
-    lsb-release
+    lsb-release \
+    git \
+    make \
+    gcc \
+    libc-dev \
+    binutils \
+    dmsetup \
+    pkg-config \
+    libseccomp-dev \
+    protobuf-compiler \
+    libprotobuf-dev \
+    wget
 
-# Install firecracker-containerd
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+# Remove old Go installation if exists
+echo "Removing old Go installation..."
+rm -rf /usr/local/go
+apt-get remove -y golang-go || true
+apt-get remove -y golang || true
 
-echo \
-  "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+# Install Go 1.22
+echo "Installing Go 1.22..."
+wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+rm go1.22.0.linux-amd64.tar.gz
 
-apt-get update
-apt-get install -y firecracker-containerd
+# Set up Go environment
+echo "Setting up Go environment..."
+export PATH=$PATH:/usr/local/go/bin
+export GOPATH=/root/go
+export GO111MODULE=on
 
-# Configure containerd
-mkdir -p /etc/containerd
-containerd config default > /etc/containerd/config.toml
-
-# Add Firecracker runtime to containerd config
-cat << EOF >> /etc/containerd/config.toml
-
-[plugins."io.containerd.runtime.v1.linux"]
-  runtime_type = "io.containerd.runtime.v1.linux"
-  runtime_engine = ""
-  runtime_root = ""
-
-[plugins."io.containerd.runtime.v2.task"]
-  platforms = ["linux/amd64"]
-
-[plugins."io.containerd.runtime.v2.runsc"]
-  runtime_type = "io.containerd.runsc.v1"
-
-[plugins."aws.firecracker"]
-  kernel_image_path = "/var/lib/firecracker-containerd/kernel/vmlinux"
-  kernel_args = "console=ttyS0 noapic reboot=k panic=1 pci=off nomodules rw"
-  snapshot_mode = "Snapshot"
+# Add Go environment variables to profile
+cat << EOF >> /etc/profile.d/go.sh
+export PATH=\$PATH:/usr/local/go/bin
+export GOPATH=/root/go
+export GO111MODULE=on
 EOF
 
-# Restart containerd
-systemctl restart containerd
+# Make the environment variables available immediately
+source /etc/profile.d/go.sh
 
-# Setup networking (CNI)
-mkdir -p /etc/cni/net.d
-cat << EOF > /etc/cni/net.d/firecracker.conflist
-{
-  "cniVersion": "0.4.0",
-  "name": "firecracker",
-  "plugins": [
-    {
-      "type": "bridge",
-      "bridge": "fcbridge0",
-      "isGateway": true,
-      "ipMasq": true,
-      "ipam": {
-        "type": "host-local",
-        "ranges": [
-          [{
-            "subnet": "172.20.0.0/24",
-            "gateway": "172.20.0.1"
-          }]
-        ],
-        "routes": [
-          { "dst": "0.0.0.0/0" }
-        ]
-      }
-    }
-  ]
-}
-EOF
+# Verify Go installation
+echo "Verifying Go installation..."
+go version
 
-# Create directories for VM resources
-mkdir -p /var/lib/firecracker-containerd/kernel
-mkdir -p /var/lib/firecracker-containerd/rootfs
+# Handle existing firecracker-containerd directory
+echo "Checking firecracker-containerd directory..."
+if [ -d "firecracker-containerd" ]; then
+    echo "Directory exists, updating repository..."
+    cd firecracker-containerd
+    git fetch
+    git reset --hard origin/main
+    git clean -fdx  # Clean untracked files
+    # Clear Go module cache for this project
+    go clean -modcache
+else
+    echo "Cloning repository..."
+    git clone https://github.com/firecracker-microvm/firecracker-containerd.git
+    cd firecracker-containerd
+fi
 
-echo "Setup completed successfully!"
+# Update Go modules
+echo "Updating Go modules..."
+go mod tidy
+go mod download
+
+# Build and install firecracker-containerd components
+echo "Building components..."
+
+echo "Building runtime..."
+cd runtime
+go mod tidy
+go mod download
+make
+cd ..
+
+echo "Building snapshotter..."
+cd snapshotter
+go mod tidy
+go mod download
+make
+cd ..
+
+echo "Building agent..."
+cd agent
+go mod tidy
+go mod download
+make
+cd ..
+
+echo "Building image-builder..."
+cd tools/image-builder
+go mod tidy
+go mod download
+
+
+mkdir -p tmp/rootfs
+make
+cd ../..
+
+echo "Installing binaries..."
+install -D -m 755 runtime/containerd-shim-aws-firecracker /usr/local/bin/containerd-shim-aws-firecracker
+install -D -m 755 snapshotter/containerd-firecracker-snapshotter /usr/local/bin/containerd-firecracker-snapshotter
+install -D -m 755 agent/containerd-firecracker-agent /usr/local/bin/containerd-firecracker-agent
+install -D -m 755 tools/image-builder/containerd-firecracker-image-builder /usr/local/bin/containerd-firecracker-image-builder
+
+cd ..
+
+# Download Firecracker binary if not exists
+if [ ! -f "/usr/local/bin/firecracker" ]; then
+    echo "Downloading Firecracker binary..."
+    release_url="https://github.com/firecracker-microvm/firecracker/releases/download/v1.4.0/firecracker-v1.4.0-x86_64.tgz"
+    curl -L ${release_url} | tar -xz
+    mv release-v1.4.0-x86_64/firecracker-v1.4.0-x86_64 /usr/local/bin/firecracker
+    chmod +x /usr/local/bin/firecracker
+fi
+
+# Download kernel image if not exists
+if [ ! -f "/var/lib/firecracker-containerd/kernel/vmlinux" ]; then
+    echo "Downloading kernel image..."
+    mkdir -p /var/lib/firecracker-containerd/kernel
+    wget https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin -O /var/lib/firecracker-containerd/kernel/vmlinux
+fi
+
+echo "Setup completed! Verifying installation..."
+
+# Verify Go version
+echo "Go version:"
+go version
+
+# Verify installation
+if [ -f "/usr/local/bin/containerd-shim-aws-firecracker" ]; then
+    echo "✓ containerd-shim-aws-firecracker installed"
+else
+    echo "✗ containerd-shim-aws-firecracker missing"
+fi
+
+if [ -f "/usr/local/bin/firecracker" ]; then
+    echo "✓ firecracker installed"
+else
+    echo "✗ firecracker missing"
+fi
+
+if [ -f "/var/lib/firecracker-containerd/kernel/vmlinux" ]; then
+    echo "✓ kernel image found"
+else
+    echo "✗ kernel image missing"
+fi
+
+echo "Installation complete. Please check above output for any errors."

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/sagoresarker/containerd-firecracker-k3s/internal/config"
@@ -12,6 +14,14 @@ import (
 )
 
 func main() {
+	configPath := flag.String("config", "../configs/config.yaml", "path to config file")
+	flag.Parse()
+
+	absConfigPath, err := filepath.Abs(*configPath)
+	if err != nil {
+		log.Fatalf("Failed to get absolute path: %v", err)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -19,7 +29,7 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 
 	// Load configuration
-	cfg, err := config.LoadConfig("configs/config.yaml")
+	cfg, err := config.LoadConfig(absConfigPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
@@ -40,7 +50,6 @@ func main() {
 	log.Printf("You can SSH into the VM using: ssh -i %s %s@%s",
 		cfg.SSH.KeyPath, cfg.SSH.User, cfg.VM.IP)
 
-	// Wait for shutdown signal
 	<-sigChan
 	log.Println("Shutting down...")
 }
