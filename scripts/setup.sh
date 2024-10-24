@@ -29,37 +29,6 @@ apt-get install -y \
     libprotobuf-dev \
     wget
 
-# Remove old Go installation if exists
-echo "Removing old Go installation..."
-rm -rf /usr/local/go
-apt-get remove -y golang-go || true
-apt-get remove -y golang || true
-
-# Install Go 1.22
-echo "Installing Go 1.22..."
-wget https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
-tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
-rm go1.22.0.linux-amd64.tar.gz
-
-# Set up Go environment
-echo "Setting up Go environment..."
-export PATH=$PATH:/usr/local/go/bin
-export GOPATH=/root/go
-export GO111MODULE=on
-
-# Add Go environment variables to profile
-cat << EOF >> /etc/profile.d/go.sh
-export PATH=\$PATH:/usr/local/go/bin
-export GOPATH=/root/go
-export GO111MODULE=on
-EOF
-
-# Make the environment variables available immediately
-source /etc/profile.d/go.sh
-
-# Verify Go installation
-echo "Verifying Go installation..."
-go version
 
 # Handle existing firecracker-containerd directory
 echo "Checking firecracker-containerd directory..."
@@ -117,7 +86,10 @@ make
 cd ../..
 
 echo "Installing binaries..."
+# Update the installation path and name to match containerd's expectation
 install -D -m 755 runtime/containerd-shim-aws-firecracker /usr/local/bin/containerd-shim-aws-firecracker
+# Add symlink with the expected name
+ln -sf /usr/local/bin/containerd-shim-aws-firecracker /usr/local/bin/containerd-shim-v2-aws-firecracker
 install -D -m 755 snapshotter/containerd-firecracker-snapshotter /usr/local/bin/containerd-firecracker-snapshotter
 install -D -m 755 agent/containerd-firecracker-agent /usr/local/bin/containerd-firecracker-agent
 install -D -m 755 tools/image-builder/containerd-firecracker-image-builder /usr/local/bin/containerd-firecracker-image-builder
@@ -138,6 +110,13 @@ if [ ! -f "/var/lib/firecracker-containerd/kernel/vmlinux" ]; then
     echo "Downloading kernel image..."
     mkdir -p /var/lib/firecracker-containerd/kernel
     wget https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin -O /var/lib/firecracker-containerd/kernel/vmlinux
+fi
+
+# Download rootfs if not exists
+if [ ! -f "/var/lib/firecracker/rootfs/rootfs.ext4" ]; then
+    echo "Downloading rootfs..."
+    mkdir -p /var/lib/firecracker/rootfs
+    wget https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/rootfs/bionic.rootfs.ext4 -O /var/lib/firecracker/rootfs/rootfs.ext4
 fi
 
 echo "Setup completed! Verifying installation..."
@@ -166,3 +145,15 @@ else
 fi
 
 echo "Installation complete. Please check above output for any errors."
+
+echo "Verifying shim binary installation..."
+if [ -f "/usr/local/bin/containerd-shim-v2-aws-firecracker" ]; then
+    echo "✓ containerd-shim-v2-aws-firecracker installed"
+else
+    echo "✗ containerd-shim-v2-aws-firecracker missing"
+    echo "Creating symlink..."
+    ln -sf /usr/local/bin/containerd-shim-aws-firecracker /usr/local/bin/containerd-shim-v2-aws-firecracker
+fi
+
+# Verify the symlink
+ls -l /usr/local/bin/containerd-shim-v2-aws-firecracker

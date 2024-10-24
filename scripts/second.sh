@@ -72,12 +72,14 @@ state = "/run/containerd"
     pool_name = "fc-dev-thinpool"
     base_image_size = "10GB"
 
-  [plugins."aws.firecracker"]
+  [plugins."io.containerd.runtime.v2.aws-firecracker"]
     kernel_image_path = "/var/lib/firecracker-containerd/kernel/vmlinux"
     kernel_args = "console=ttyS0 noapic reboot=k panic=1 pci=off nomodules rw"
     snapshot_mode = "devmapper"
     cpu_template = "T2"
     log_level = "Debug"
+    shim_debug = true
+    debug = true
 
 [debug]
   level = "debug"

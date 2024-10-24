@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"syscall"
 	"time"
 
@@ -82,7 +83,8 @@ func (m *Manager) LaunchVM(ctx context.Context) (string, error) {
 			withVMAnnotations(m.config),
 			oci.WithRootFSPath("rootfs"),
 		),
-		containerd.WithRuntime("aws.firecracker", nil),
+		// Update runtime string to match containerd config
+		containerd.WithRuntime("io.containerd.runtime.v2.aws-firecracker", nil),
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to create container: %w", err)
@@ -135,6 +137,17 @@ func (m *Manager) validateConfig() error {
 	if m.config.VM.Kernel == "" {
 		return fmt.Errorf("kernel path cannot be empty")
 	}
+
+	// Check if kernel file exists
+	if _, err := os.Stat("/var/lib/firecracker-containerd/kernel/vmlinux"); err != nil {
+		return fmt.Errorf("kernel file not found: %w", err)
+	}
+
+	// Check if rootfs exists
+	if _, err := os.Stat("/var/lib/firecracker/rootfs/rootfs.ext4"); err != nil {
+		return fmt.Errorf("rootfs not found: %w", err)
+	}
+
 	return nil
 }
 
@@ -299,12 +312,12 @@ func withVMAnnotations(cfg *config.Config) oci.SpecOpts {
 		memoryInBytes := cfg.VM.Memory * 1024 * 1024
 
 		vmConfig := map[string]interface{}{
-			"kernel":          cfg.VM.Kernel,
+			"kernel":          "/var/lib/firecracker-containerd/kernel/vmlinux", // Update kernel path
 			"cpu_count":       cfg.VM.CPUs,
 			"memory_in_bytes": memoryInBytes,
 			"kernel_args": fmt.Sprintf(
 				"console=ttyS0 noapic reboot=k panic=1 pci=off nomodules rw "+
-					"ip=%s::%s:%s::eth0:off root=/dev/vda1 "+
+					"ip=%s::%s:%s::eth0:off root=/dev/vda "+  // Update root device
 					"systemd.unified_cgroup_hierarchy=0 systemd.journald.forward_to_console=1",
 				cfg.VM.IP,
 				cfg.VM.Gateway,
@@ -323,7 +336,7 @@ func withVMAnnotations(cfg *config.Config) oci.SpecOpts {
 			"drives": []map[string]interface{}{
 				{
 					"is_root_device": true,
-					"path_on_host":   "/var/lib/firecracker/rootfs.ext4",
+					"path_on_host":   "/var/lib/firecracker/rootfs/rootfs.ext4", // Update rootfs path
 					"is_read_only":   false,
 				},
 			},

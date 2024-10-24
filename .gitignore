@@ -1,1 +1,7 @@
 scripts/tmp/rootfs
+bin
+scripts/firecracker-containerd
+bin/firecracker-containerd
+bin/firecracker
+bin/firecracker-launcher
+scripts/firecracker-containerd
